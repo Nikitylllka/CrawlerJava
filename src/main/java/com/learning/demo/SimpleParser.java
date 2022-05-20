@@ -1,5 +1,9 @@
 package com.learning.demo;
 
+import com.rabbitmq.client.Channel;
+import com.rabbitmq.client.Connection;
+import com.rabbitmq.client.ConnectionFactory;
+import com.rabbitmq.client.MessageProperties;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
@@ -10,18 +14,36 @@ import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.select.Elements;
 
+import java.awt.*;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.util.LinkedList;
 import java.util.List;
+import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 
 public class SimpleParser {
 
+    final static String PRODUCER_QUEUE = "Producer_Queue";
     final static String URL = "https://trashbox.ru";
     static Boolean Flag_Down = false;
     static MyRunnable mThing;
 
-    public static void main(String[] args) throws IOException, InterruptedException {
+    public static void main(String[] args) throws IOException, InterruptedException, TimeoutException {
 //        List<DescriptionNews> descriptionNews = new ArrayList<>();
+
+        ConnectionFactory factory = new ConnectionFactory();
+        factory.setUsername("rabbitmq");
+        factory.setPassword("rabbitmq");
+        factory.setVirtualHost("/");
+        factory.setHost("127.0.0.1");
+        factory.setPort(5672);
+        Connection conn = factory.newConnection();
+        Channel channel = conn.createChannel();
+        channel.queueDeclare(PRODUCER_QUEUE, false, false,false,null);//название очереди,долговечность, уникальность, Автоудаление, какой-то объект
+
         List<String> firstList = new CopyOnWriteArrayList<>(); // лист с ссылками, которые считал главный поток
 
         Document doc = null;
@@ -36,16 +58,16 @@ public class SimpleParser {
                 doc = Jsoup.parse(entity.getContent(), "UTF-8", URL);
             }
         }
-
-
         Elements ListNews = doc.getElementsByAttributeValue("class", "a_topic_cover");
-
         for (int i = 0; i < ListNews.size(); i++) {
             firstList.add(URL + ListNews.get(i).attr("href")); // заполнение листа главным потоком
+            channel.basicPublish("",PRODUCER_QUEUE,null, firstList.get(i).getBytes(StandardCharsets.UTF_8));
         }
+        channel.close();
+        conn.close();
         // ----------------------------------------------------------------------------------------------------------
 
-        mThing = new MyRunnable(firstList);
+        mThing = new MyRunnable();
         Thread myThread1 = new Thread(mThing);
         Thread myThread2 = new Thread(mThing);
         Thread myThread3 = new Thread(mThing);
@@ -53,7 +75,6 @@ public class SimpleParser {
         myThread1.start();
         myThread2.start();
         myThread3.start();
-
     }
 
     public static void ParsingNews(String localUrl) throws IOException {
@@ -92,7 +113,6 @@ public class SimpleParser {
         NowNews.link = localUrl;
         NowNews.main_text = CurNews.select("p").text();
 
-
         System.out.println("Title:" + NowNews.title + " | " + NowNews.link
                 + "\nAuthor:" + NowNews.author + "\tLink on Author:" + NowNews.author_link
                 + "\nDate Publish:" + NowNews.date_first
@@ -104,9 +124,3 @@ public class SimpleParser {
     }
 
 }
-
-
-
-
-
-
