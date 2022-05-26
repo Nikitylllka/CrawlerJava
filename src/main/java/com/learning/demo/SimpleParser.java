@@ -3,26 +3,42 @@ package com.learning.demo;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
-import com.rabbitmq.client.MessageProperties;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 
 import org.apache.http.impl.client.HttpClients;
+import org.elasticsearch.action.search.SearchRequest;
+import org.elasticsearch.action.search.SearchResponse;
+import org.elasticsearch.common.settings.Settings;
+import org.elasticsearch.common.transport.TransportAddress;
+import org.elasticsearch.index.query.BoolQueryBuilder;
+import org.elasticsearch.index.query.MatchQueryBuilder;
+import org.elasticsearch.index.query.QueryBuilders;
+import org.elasticsearch.search.SearchHit;
+import org.elasticsearch.search.aggregations.AggregationBuilders;
+import org.elasticsearch.search.aggregations.bucket.terms.Terms;
+import org.elasticsearch.search.aggregations.bucket.terms.TermsAggregationBuilder;
+import org.elasticsearch.search.builder.SearchSourceBuilder;
+import org.elasticsearch.transport.client.PreBuiltTransportClient;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
 import org.jsoup.select.Elements;
 
-import java.awt.*;
 import java.io.IOException;
+import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
-import java.util.LinkedList;
+import java.util.Arrays;
 import java.util.List;
-import java.util.Queue;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+
+import org.elasticsearch.client.transport.TransportClient;
+
+import static org.elasticsearch.xcontent.XContentFactory.jsonBuilder;
 
 public class SimpleParser {
 
@@ -30,8 +46,9 @@ public class SimpleParser {
     final static String URL = "https://trashbox.ru";
     static Boolean Flag_Down = false;
     static MyRunnable mThing;
+    private static CloseableHttpClient client;
 
-    public static void main(String[] args) throws IOException, InterruptedException, TimeoutException {
+    public static void main(String[] args) throws IOException, InterruptedException, TimeoutException, ExecutionException {
 //        List<DescriptionNews> descriptionNews = new ArrayList<>();
 
         ConnectionFactory factory = new ConnectionFactory();
@@ -42,7 +59,7 @@ public class SimpleParser {
         factory.setPort(5672);
         Connection conn = factory.newConnection();
         Channel channel = conn.createChannel();
-        channel.queueDeclare(PRODUCER_QUEUE, false, false,false,null);//название очереди,долговечность, уникальность, Автоудаление, какой-то объект
+        channel.queueDeclare(PRODUCER_QUEUE, false, false, false, null);//название очереди,долговечность, уникальность, Автоудаление, какой-то объект
 
         List<String> firstList = new CopyOnWriteArrayList<>(); // лист с ссылками, которые считал главный поток
 
@@ -61,23 +78,51 @@ public class SimpleParser {
         Elements ListNews = doc.getElementsByAttributeValue("class", "a_topic_cover");
         for (int i = 0; i < ListNews.size(); i++) {
             firstList.add(URL + ListNews.get(i).attr("href")); // заполнение листа главным потоком
-            channel.basicPublish("",PRODUCER_QUEUE,null, firstList.get(i).getBytes(StandardCharsets.UTF_8));
+            channel.basicPublish("", PRODUCER_QUEUE, null, firstList.get(i).getBytes(StandardCharsets.UTF_8));
         }
         channel.close();
         conn.close();
         // ----------------------------------------------------------------------------------------------------------
 
         mThing = new MyRunnable();
-        Thread myThread1 = new Thread(mThing);
-        Thread myThread2 = new Thread(mThing);
-        Thread myThread3 = new Thread(mThing);
+        Thread consumer1 = new Thread(mThing);
+        Thread consumer2 = new Thread(mThing);
+        Thread consumer3 = new Thread(mThing);
 
-        myThread1.start();
-        myThread2.start();
-        myThread3.start();
+        consumer1.start();
+        consumer2.start();
+        consumer3.start();
+
+
+        TimeUnit.SECONDS.sleep(20); // ожидание заполнения бд
+
+        TransportClient client_get = new PreBuiltTransportClient(
+                Settings.builder().put("cluster.name", "docker-cluster").build()).addTransportAddress(new TransportAddress(InetAddress.getByName("localhost"), 9300));
+        BoolQueryBuilder bool_quare = QueryBuilders.boolQuery();
+        MatchQueryBuilder match_quare = QueryBuilders.matchQuery("title", "Обзор");
+        bool_quare.must(match_quare);
+        SearchSourceBuilder search_src = new SearchSourceBuilder().query(match_quare).size(1000);
+        SearchRequest search_request = new SearchRequest().indices("news").source(search_src);
+        SearchHit[] search_hits = client_get.search(search_request).get().getHits().getHits();
+
+        List hit = Arrays.stream(search_hits).toList();
+        for (int count = 0; count < search_hits.length; count++) {
+            System.out.println(hit.get(count));
+        }
+
+        TermsAggregationBuilder aggregation_builder = AggregationBuilders.terms("author_count").field("author.keyword");
+        SearchSourceBuilder aggregation_search_src = new SearchSourceBuilder().aggregation(aggregation_builder);
+        SearchRequest aggregation_search_request = new SearchRequest().indices("news").source(aggregation_search_src);
+        SearchResponse aggregation_search_response = client_get.search(aggregation_search_request).get();
+        Terms terms = aggregation_search_response.getAggregations().get("author_count");
+        for (int count = 0; count < terms.getBuckets().size(); count++) {
+
+            System.out.printf("frequency author[%s] in ES = %s\n", terms.getBuckets().get(count).getKey()
+                    ,terms.getBuckets().get(count).getDocCount());
+        }
     }
 
-    public static void ParsingNews(String localUrl) throws IOException {
+    public static DescriptionNews ParsingNews(String localUrl) throws IOException {
         Document doc = null;
         int code = 0;
         try (CloseableHttpClient client = HttpClients.createDefault();
@@ -96,7 +141,7 @@ public class SimpleParser {
                 doc = Jsoup.parse(entity.getContent(), "UTF-8", localUrl);
             } else {
                 System.out.println("ERROR:" + code + " from:" + localUrl);
-                return;
+                return null;
             }
 
             code = response.getStatusLine().getStatusCode();
@@ -113,14 +158,15 @@ public class SimpleParser {
         NowNews.link = localUrl;
         NowNews.main_text = CurNews.select("p").text();
 
-        System.out.println("Title:" + NowNews.title + " | " + NowNews.link
-                + "\nAuthor:" + NowNews.author + "\tLink on Author:" + NowNews.author_link
-                + "\nDate Publish:" + NowNews.date_first
-                + "\nDate Change:" + NowNews.date_change
-                + "\n" + NowNews.main_text
-                + "\nCode:" + code
-                + "\nPars by " + Thread.currentThread().getName()
-                + "\n");
-    }
+//        System.out.println("Title:" + NowNews.title + " | " + NowNews.link
+//                + "\nAuthor:" + NowNews.author + "\tLink on Author:" + NowNews.author_link
+//                + "\nDate Publish:" + NowNews.date_first
+//                + "\nDate Change:" + NowNews.date_change
+//                + "\n" + NowNews.main_text
+//                + "\nCode:" + code
+//                + "\nPars by " + Thread.currentThread().getName()
+//                + "\n");
 
+        return NowNews;
+    }
 }
