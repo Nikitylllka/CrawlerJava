@@ -3,12 +3,22 @@ package com.learning.demo;
 import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
+import edu.stanford.nlp.ling.CoreAnnotations;
+import edu.stanford.nlp.pipeline.CoreDocument;
+import edu.stanford.nlp.pipeline.StanfordCoreNLP;
+import edu.stanford.nlp.pipeline.CoreDocument;
+import edu.stanford.nlp.ling.CoreLabel;
+import edu.stanford.nlp.pipeline.CoreSentence;
+import edu.stanford.nlp.pipeline.StanfordCoreNLP;
+import edu.stanford.nlp.tagger.maxent.MaxentTagger;
+import edu.stanford.nlp.util.CoreMap;
 import org.apache.http.HttpEntity;
 import org.apache.http.client.methods.CloseableHttpResponse;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.CloseableHttpClient;
 
 import org.apache.http.impl.client.HttpClients;
+import org.apache.log4j.BasicConfigurator;
 import org.elasticsearch.action.search.SearchRequest;
 import org.elasticsearch.action.search.SearchResponse;
 import org.elasticsearch.common.settings.Settings;
@@ -32,14 +42,19 @@ import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Properties;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 import org.elasticsearch.client.transport.TransportClient;
+import edu.stanford.nlp.pipeline.*;
 
-import static org.elasticsearch.xcontent.XContentFactory.jsonBuilder;
+import java.util.*;
+
+import static java.awt.SystemColor.text;
+
 
 public class SimpleParser {
 
@@ -94,12 +109,66 @@ public class SimpleParser {
         consumer2.start();
         consumer3.start();
 
-
         TimeUnit.SECONDS.sleep(20); // ожидание заполнения бд
 
         cluster_and_aggreg();
+        definition_speak();
+    }
 
+    public static void definition_speak() throws UnknownHostException, ExecutionException, InterruptedException {
+        // creates a StanfordCoreNLP object, with POS tagging, lemmatization, NER, parsing, and coreference resolution
+        // https://github.com/MANASLU8/CoreNLP
+        Properties props = new Properties();
+        props.setProperty("annotators", "tokenize, ssplit, pos, lemma, ner, parse, dcoref");
+        props.setProperty("tokenize.language", "en");
+        props.setProperty("pos.model", "C:\\Users\\mbond\\IdeaProjects\\HelloWorld\\RusStanNLP\\edu\\stanford\\nlp\\models\\pos-tagger\\russian-ud-pos.tagger");
+        props.setProperty("customAnnotatorClass.custom.lemma", "C:\\Users\\mbond\\IdeaProjects\\HelloWorld\\RusStanNLP\\edu\\stanford\\nlp\\international\\russian\\process\\RussianLemmatizationAnnotator.class");
+        props.setProperty("custom.lemma.dictionaryPath", "C:\\Users\\mbond\\IdeaProjects\\HelloWorld\\RusStanNLP\\edu\\stanford\\nlp\\international\\russian\\process\\dict.tsv");
+        props.setProperty("customAnnotatorClass.custom.morpho", "C:\\Users\\mbond\\IdeaProjects\\HelloWorld\\RusStanNLP\\edu\\stanford\\nlp\\international\\russian\\process\\RussianMorphoAnnotator.class");
+        props.setProperty("custom.morpho.model", "C:\\Users\\mbond\\IdeaProjects\\HelloWorld\\RusStanNLP\\edu\\stanford\\nlp\\models\\pos-tagger\\russian-ud-mf.tagger");
+        props.setProperty("depparse.model", "C:\\Users\\mbond\\IdeaProjects\\HelloWorld\\RusStanNLP\\edu\\stanford\\nlp\\models\\parser\\nndep\\nndep.rus.model.wiki.txt.gz");
+        props.setProperty("depparse.language", "russian");
 
+        StanfordCoreNLP pipeline = new StanfordCoreNLP(props);
+
+        TermsAggregationBuilder aggregation_builder = AggregationBuilders.terms("title_count").field("title.keyword");
+
+        TransportClient client_get = new PreBuiltTransportClient(
+                Settings.builder().put("cluster.name", "docker-cluster").build()).addTransportAddress(new TransportAddress(InetAddress.getByName("localhost"), 9300));
+
+        SearchSourceBuilder aggregation_search_src = new SearchSourceBuilder().aggregation(aggregation_builder);
+        SearchRequest aggregation_search_request = new SearchRequest().indices("news").source(aggregation_search_src);
+        SearchResponse aggregation_search_response = client_get.search(aggregation_search_request).get();
+
+        Terms terms = aggregation_search_response.getAggregations().get("title_count");
+
+        String text;
+        // create an empty Annotation just with the given text
+
+        for (int count = 0; count < terms.getBuckets().size(); count++) {
+
+            text = String.valueOf(terms.getBuckets().get(count).getKey());
+
+            Annotation document = new Annotation(text);
+
+            // run all Annotators on this text
+            pipeline.annotate(document);
+
+            List<CoreMap> sentences = document.get(CoreAnnotations.SentencesAnnotation.class);
+            System.out.println(String.format("Анализ заголовка новости № %d",count+1));
+            for (CoreMap sentence : sentences) {
+                // traversing the words in the current sentence
+                // a CoreLabel is a CoreMap with additional token-specific methods
+                for (CoreLabel token : sentence.get(CoreAnnotations.TokensAnnotation.class)) {
+                    // this is the text of the token
+                    String word = token.get(CoreAnnotations.TextAnnotation.class);
+                    // this is the POS tag of the token
+                    String pos = token.get(CoreAnnotations.PartOfSpeechAnnotation.class);
+                    System.out.println(String.format("Слово:%20s Часть речи: %s", word, pos));
+                }
+            }
+            System.out.println("");
+        }
     }
 
     public static void cluster_and_aggreg() throws ExecutionException, InterruptedException, UnknownHostException {
@@ -124,11 +193,12 @@ public class SimpleParser {
 
             int start = 45;
             int end = 87;
-            char[] dst=new char[end - start];
+            char[] dst = new char[end - start];
             test.getChars(start, end, dst, 0);
             System.out.println(dst);
         }
 
+        System.out.println("");
         TermsAggregationBuilder aggregation_builder = AggregationBuilders.terms("author_count").field("author.keyword");
 
         SearchSourceBuilder aggregation_search_src = new SearchSourceBuilder().aggregation(aggregation_builder);
@@ -138,9 +208,10 @@ public class SimpleParser {
         Terms terms = aggregation_search_response.getAggregations().get("author_count");
         for (int count = 0; count < terms.getBuckets().size(); count++) {
 
-            System.out.printf("frequency author[%s] in ES = %s\n", terms.getBuckets().get(count).getKey()
-                    ,terms.getBuckets().get(count).getDocCount());
+            System.out.printf("Частота появляения автора: [%s] in ES = %s\n", terms.getBuckets().get(count).getKey()
+                    , terms.getBuckets().get(count).getDocCount());
         }
+        client_get.close();
     }
 
     public static DescriptionNews ParsingNews(String localUrl) throws IOException {

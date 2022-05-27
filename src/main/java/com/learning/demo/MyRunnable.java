@@ -5,6 +5,7 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 import com.rabbitmq.client.GetResponse;
+import org.apache.log4j.BasicConfigurator;
 import org.elasticsearch.client.Client;
 import org.elasticsearch.client.transport.TransportClient;
 import org.elasticsearch.common.settings.Settings;
@@ -31,6 +32,7 @@ public class MyRunnable implements Runnable      //(содержащее мет�
     private Iterator<String> myIterator;
     private Client client;
     private TransportClient client_es;
+
 
     public MyRunnable() throws IOException, TimeoutException {
     }
@@ -109,5 +111,4 @@ public class MyRunnable implements Runnable      //(содержащее мет�
         }
         return  String.valueOf(hexString);
     }
-
 }
