@@ -27,6 +27,7 @@ import java.util.concurrent.TimeoutException;
 public class MyRunnable implements Runnable      //(содержащее метод run())
 {
 
+    final static String PRODUCER_QUEUE = "Producer_Queue";
     private Iterator<String> myIterator;
     private Client client;
     private TransportClient client_es;
@@ -68,7 +69,7 @@ public class MyRunnable implements Runnable      //(содержащее мет�
         GetResponse raw_url = null; // запрос из которого необходимо вытащить только его наполнение , то есть локальную ссылку
         while (true) {
             try {
-                raw_url = (channel.basicGet(SimpleParser.PRODUCER_QUEUE, false)); //basicGet :имя очереди на rabbit'e, autoAck подтверждение доставки сообщение или нет
+                raw_url = (channel.basicGet(PRODUCER_QUEUE, false)); //basicGet :имя очереди на rabbit'e, autoAck подтверждение доставки сообщение или нет
             } catch (IOException e) {
                 e.printStackTrace();
             }
@@ -82,25 +83,31 @@ public class MyRunnable implements Runnable      //(содержащее мет�
                 }
             }
             String json = new Gson().toJson(StructReport);
-            MessageDigest md = null;
-            try {
-                md = MessageDigest.getInstance("MD5");
-            } catch (NoSuchAlgorithmException e) {
-                e.printStackTrace();
-            }
 
-            md.update(json.getBytes());
-            byte byteData[] = md.digest();
-            StringBuffer hexString = new StringBuffer();
-            for (byte aByteData : byteData) {
-                String hex = Integer.toHexString(0xff & aByteData);
-                if (hex.length() == 1) hexString.append('0');
-                hexString.append(hex);
-            }
 
-            String id = String.valueOf(hexString);
 
-            client_es.prepareIndex("news", "_doc", id).setSource(json, XContentType.JSON).execute().actionGet();
+
+            client_es.prepareIndex("news", "_doc", create_hash(json)).setSource(json, XContentType.JSON).execute().actionGet();
+
         }
     }
+
+    public String create_hash(String json) {
+        MessageDigest md = null;
+        try {
+            md = MessageDigest.getInstance("MD5");
+        } catch (NoSuchAlgorithmException e) {
+            e.printStackTrace();
+        }
+        md.update(json.getBytes());
+        byte byteData[] = md.digest();
+        StringBuffer hexString = new StringBuffer();
+        for (byte aByteData : byteData) {
+            String hex = Integer.toHexString(0xff & aByteData);
+            if (hex.length() == 1) hexString.append('0');
+            hexString.append(hex);
+        }
+        return  String.valueOf(hexString);
+    }
+
 }

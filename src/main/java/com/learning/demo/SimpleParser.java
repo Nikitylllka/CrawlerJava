@@ -28,6 +28,7 @@ import org.jsoup.select.Elements;
 
 import java.io.IOException;
 import java.net.InetAddress;
+import java.net.UnknownHostException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.List;
@@ -96,24 +97,44 @@ public class SimpleParser {
 
         TimeUnit.SECONDS.sleep(20); // ожидание заполнения бд
 
+        cluster_and_aggreg();
+
+
+    }
+
+    public static void cluster_and_aggreg() throws ExecutionException, InterruptedException, UnknownHostException {
+
         TransportClient client_get = new PreBuiltTransportClient(
                 Settings.builder().put("cluster.name", "docker-cluster").build()).addTransportAddress(new TransportAddress(InetAddress.getByName("localhost"), 9300));
+
+
         BoolQueryBuilder bool_quare = QueryBuilders.boolQuery();
         MatchQueryBuilder match_quare = QueryBuilders.matchQuery("title", "Обзор");
+
         bool_quare.must(match_quare);
         SearchSourceBuilder search_src = new SearchSourceBuilder().query(match_quare).size(1000);
         SearchRequest search_request = new SearchRequest().indices("news").source(search_src);
-        SearchHit[] search_hits = client_get.search(search_request).get().getHits().getHits();
 
-        List hit = Arrays.stream(search_hits).toList();
+        SearchHit[] search_hits = client_get.search(search_request).get().getHits().getHits();
+        List list_hits = Arrays.stream(search_hits).toList();
+        System.out.println("id новостей, в которых в названии упоминается 'Обзор':");
+
         for (int count = 0; count < search_hits.length; count++) {
-            System.out.println(hit.get(count));
+            String test = list_hits.get(count).toString();
+
+            int start = 45;
+            int end = 87;
+            char[] dst=new char[end - start];
+            test.getChars(start, end, dst, 0);
+            System.out.println(dst);
         }
 
         TermsAggregationBuilder aggregation_builder = AggregationBuilders.terms("author_count").field("author.keyword");
+
         SearchSourceBuilder aggregation_search_src = new SearchSourceBuilder().aggregation(aggregation_builder);
         SearchRequest aggregation_search_request = new SearchRequest().indices("news").source(aggregation_search_src);
         SearchResponse aggregation_search_response = client_get.search(aggregation_search_request).get();
+
         Terms terms = aggregation_search_response.getAggregations().get("author_count");
         for (int count = 0; count < terms.getBuckets().size(); count++) {
 
